@@ -1,0 +1,7 @@
+__pycache__
+.deepface
+.venv
+venv2
+.env
+.python-version
+
