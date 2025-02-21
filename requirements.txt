@@ -1,8 +1,9 @@
 deepface==0.0.93
 tensorflow==2.9.0
-psycopg2==2.9.10
 uvicorn==0.34.0
 fastapi==0.115.6
 numpy==1.26.0
 python-multipart==0.0.20
 torch==2.5.1
+scipy==1.15.2
+weaviate-client
