@@ -6,3 +6,4 @@ fastapi==0.115.6
 numpy==1.26.0
 python-multipart==0.0.20
 torch==2.5.1
+weaviate-client==4.11.0
