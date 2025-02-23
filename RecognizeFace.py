@@ -61,7 +61,7 @@ async def register_face(face_id: str, file: UploadFile = File(...)):
         # Store embedding in Weaviate
         weaviate.data_object.create(
             class_name=WEAVIATE_CLASS,
-            data={"face_id": face_id},
+            data_object={"face_id": face_id},
             vector=embedding,
         )
 
@@ -83,7 +83,7 @@ async def recognize(file: UploadFile = File(...)):
         # Search for the closest match in Weaviate
         response = weaviate.query.get(
             WEAVIATE_CLASS, ["face_id"]
-        ).with_near_vector(query_embedding).with_limit(1).do()
+        ).with_near_vector({"vector": query_embedding}).with_limit(1).do()
 
         if response["data"]["Get"][WEAVIATE_CLASS]:
             match = response["data"]["Get"][WEAVIATE_CLASS][0]
@@ -109,3 +109,7 @@ async def recognize_image(data: Data):
     image_data = base64.b64decode(data.image)
     image = np.array(Image.open(BytesIO(image_data)))
     return await recognize(UploadFile(filename="image.jpg", file=BytesIO(image_data)))
+
+# @app.get("/db")
+# async def get_all_data():
+#     return weaviate.data_object.get()
