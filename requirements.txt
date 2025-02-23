@@ -6,4 +6,5 @@ numpy==1.26.0
 python-multipart==0.0.20
 torch==2.5.1
 scipy==1.15.2
+python-dotenv==1.0.1
 weaviate-client
