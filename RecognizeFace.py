@@ -84,14 +84,17 @@ async def recognize(file: UploadFile = File(...)):
 
         # Search for the closest match in Weaviate
         response = weaviate.query.get(
-            WEAVIATE_CLASS, ["face_id"]
-        ).with_near_vector({"vector": query_embedding}).with_limit(1).do()
+            WEAVIATE_CLASS, ["face_id","_additional { distance }"]
+        ).with_near_vector({
+            "vector": query_embedding,
+            "distance" : 0.35
+        }).with_limit(1).do()
 
+        parsed_response = response["data"]["Get"][WEAVIATE_CLASS][0]
         if response["data"]["Get"][WEAVIATE_CLASS]:
-            match = response["data"]["Get"][WEAVIATE_CLASS][0]
-            return {"name": match["face_id"], "distance": "similar"}  # Weaviate does similarity scoring
+            return {"name": parsed_response["face_id"], "distance":parsed_response["_additional"]["distance"]}  # Weaviate does similarity scoring
         else:
-            return {"name": "Unknown Person", "distance": "far"}
+            return {"name": "Face Unknown", "distance":parsed_response["_additional"]["distance"]}
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -115,3 +118,10 @@ async def recognize_image(data: Data):
 # @app.get("/db")
 # async def get_all_data():
 #     return weaviate.data_object.get()
+
+# @app.delete("/")
+# async def delete(id: str):
+#     return weaviate.data_object.delete(
+#         uuid=id,
+#         class_name=WEAVIATE_CLASS
+#     )
