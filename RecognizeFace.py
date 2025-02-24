@@ -57,6 +57,7 @@ async def register_face(face_id: str, file: UploadFile = File(...)):
 
         encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn")
         embedding = encode[0]["embedding"]
+        embedding = embedding / np.linalg.norm(embedding)
 
         # Store embedding in Weaviate
         weaviate.data_object.create(
@@ -79,6 +80,7 @@ async def recognize(file: UploadFile = File(...)):
         imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn")
         query_embedding = encode[0]["embedding"]
+        query_embedding = query_embedding / np.linalg.norm(query_embedding)
 
         # Search for the closest match in Weaviate
         response = weaviate.query.get(
