@@ -51,7 +51,7 @@ async def register_face(face_id: str, file: UploadFile = File(...)):
     try:
         # Extract and encode face
         imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        face = DeepFace.extract_faces(imgS, detector_backend="fastmtcnn", enforce_detection=True)
+        face = DeepFace.extract_faces(imgS, detector_backend="fastmtcnn", enforce_detection=True, anti_spoofing=True)
         if not face:
             raise HTTPException(status_code=400, detail="No face detected in image")
 
@@ -78,7 +78,7 @@ async def recognize(file: UploadFile = File(...)):
     try:
         # Extract and encode face
         imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn")
+        encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn", anti_spoofing=True)
         query_embedding = encode[0]["embedding"]
         query_embedding = query_embedding / np.linalg.norm(query_embedding)
 
