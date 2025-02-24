@@ -4,14 +4,15 @@ import numpy as np
 from PIL import Image
 import time
 from typing import Tuple
-from RecognizeFace import recognize_face, load_encodings
+from RecognizeFace import register_new_face, recognize_face, load_encodings
 import base64
 from io import BytesIO
+from datetime import datetime
 
 # Constants
 OVAL_WIDTH_RATIO = 0.2
 OVAL_HEIGHT_RATIO = 0.35
-OVAL_COLOR = (0, 0, 0)
+OVAL_COLOR = (255, 255, 0)
 FONT = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -41,7 +42,7 @@ class FaceDetector:
         end_angle = -90 + (360 * progress)
         cv2.ellipse(frame, center, axes, 0, start_angle, end_angle, OVAL_COLOR, 2)
 
-        text = f"{3 - int(progress * 3)}"
+        text = f"{2 - int(progress * 2)}"
         text_size = cv2.getTextSize(text, FONT, 1.5, 2)[0]
         text_x = center[0] - (text_size[0] // 2)
         text_y = center[1] + (text_size[1] // 2)
@@ -68,12 +69,15 @@ def initialize_camera():
     if cap.isOpened():
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_FPS, 30)
+        cap.set(cv2.CAP_PROP_FPS, 60)
     return cap
 
 
 def main():
-    st.title("Real-time Face Recognition")
+    st.title("Face Recognition System")
+
+    # Add mode selection
+    mode = st.sidebar.selectbox("Select Mode", ["Recognition", "Registration"])
 
     # Load face encodings
     load_encodings()
@@ -97,13 +101,49 @@ def main():
         st.session_state.cap = initialize_camera()
         st.session_state.camera_active = True
 
+    # Registration input field
+    if mode == "Registration":
+        face_id = st.text_input("Enter Name")
+
+        # Add tabs for different registration methods
+        tab1, tab2 = st.tabs(["Camera", "Upload File"])
+
+        with tab1:
+            register_button = st.button("Register Face from Camera")
+
+        with tab2:
+            uploaded_file = st.file_uploader(
+                "Choose an image file", type=["jpg", "jpeg", "png"]
+            )
+            register_file_button = st.button("Register Face from File")
+
+            if register_file_button and uploaded_file is not None and face_id:
+                try:
+                    # Convert uploaded file to numpy array
+                    file_bytes = np.asarray(
+                        bytearray(uploaded_file.read()), dtype=np.uint8
+                    )
+                    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+                    # Try to register the face
+                    success = register_new_face(image_rgb, face_id)
+                    if success:
+                        st.success(f"Successfully registered {face_id} from file")
+                        # Reload encodings
+                        load_encodings()
+                    else:
+                        st.error("Registration failed")
+                except Exception as e:
+                    st.error(f"Registration error: {str(e)}")
+
     # State variables
     countdown_active = False
     countdown_start = 0
     last_recognition_time = 0
     recognition_cooldown = 2
     face_detection_start = 0
-    continuous_detection_required = 3
+    continuous_detection_required = 2
     last_face_detected_time = 0
 
     while st.session_state.camera_active:
@@ -128,7 +168,12 @@ def main():
             if face_in_oval:
                 if face_detection_start == 0:
                     face_detection_start = current_time
-                    status_placeholder.info("Keep your face steady...")
+                    if mode == "Recognition":
+                        status_placeholder.info("Keep your face steady...")
+                    else:
+                        status_placeholder.info(
+                            "Ready to register. Click 'Register Face' button."
+                        )
                 last_face_detected_time = current_time
             else:
                 if current_time - last_face_detected_time > 2:
@@ -136,73 +181,101 @@ def main():
                     countdown_active = False
                     status_placeholder.warning("Face not detected in oval guide")
 
-            # Start countdown only after continuous face detection
-            if face_detection_start > 3 and not countdown_active:
-                if current_time - face_detection_start >= continuous_detection_required:
-                    if current_time - last_recognition_time > recognition_cooldown:
-                        countdown_active = True
-                        countdown_start = current_time
+            # Handle registration from camera
+            if mode == "Registration" and register_button and face_id and face_in_oval:
+                try:
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    success = register_new_face(rgb_frame, face_id)
+                    if success:
+                        status_placeholder.success(f"Successfully registered {face_id}")
+                        # Reload encodings after successful registration
+                        load_encodings()
+                        time.sleep(2)  # Show success message for 2 seconds
+                    else:
+                        status_placeholder.error("Registration failed")
+                except Exception as e:
+                    status_placeholder.error(f"Registration error: {str(e)}")
 
-            if countdown_active:
-                elapsed = current_time - countdown_start
-                if elapsed > 1:
-                    if st.session_state.cap.isOpened() and face_in_oval:
-                        try:
-                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                            results = recognize_face(rgb_frame)
+            # Recognition logic (only in Recognition mode)
+            if mode == "Recognition":
+                # Start countdown only after continuous face detection
+                if face_detection_start > 3 and not countdown_active:
+                    if (
+                        current_time - face_detection_start
+                        >= continuous_detection_required
+                    ):
+                        if current_time - last_recognition_time > recognition_cooldown:
+                            countdown_active = True
+                            countdown_start = current_time
 
-                            # Parse the error detail from HTTPException
-                            if isinstance(results, dict):
-                                if (
-                                    "detail" in results
-                                ):  # Handle FastAPI HTTPException response
-                                    error_message = results["detail"].lower()
-                                    if "spoof" in error_message:
-                                        status_placeholder.warning(
-                                            "⚠️ Spoof detected! Please use a real face instead of an image."
+                if countdown_active:
+                    elapsed = current_time - countdown_start
+                    if elapsed >= 2:
+                        if st.session_state.cap.isOpened() and face_in_oval:
+                            try:
+                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                results = recognize_face(rgb_frame)
+
+                                # Parse the error detail from HTTPException
+                                if isinstance(results, dict):
+                                    if "detail" in results:
+                                        error_message = results["detail"].lower()
+                                        if "spoof" in error_message:
+                                            spoof_message = f"""
+                                             **SPOOF DETECTED**
+                                            - **Time**: {datetime.now().strftime('%H:%M:%S')}
+                                            - **Status**: Spoofed image detected
+                                            """
+                                            # Show in Streamlit
+                                            status_placeholder.error(spoof_message)
+                                            result_placeholder.empty()
+                                    elif "name" in results:
+                                        result_placeholder.success(
+                                            f"Recognized: {results['name']} (Distance: {results['distance']:.2f})"
                                         )
-                                        result_placeholder.empty()
-                                    else:
-                                        status_placeholder.error(
-                                            f"Recognition error: {results['detail']}"
-                                        )
-                                        result_placeholder.empty()
-                                elif "name" in results:  # Successful recognition
-                                    result_placeholder.success(
-                                        f"Recognized: {results['name']} (Distance: {results['distance']:.2f})"
+                                        status_placeholder.empty()
+
+                            except Exception as e:
+                                error_text = str(e)
+                                if hasattr(e, "detail"):
+                                    error_text = e.detail
+
+                                if "spoof" in error_text.lower():
+                                    st.markdown("# 🚨 SPOOF DETECTED")
+
+                                    # Display detailed information
+                                    st.markdown(
+                                        f"""
+                                    - **Time**: {datetime.now().strftime('%H:%M:%S')}
+                                    - **Error**: {error_text}
+                                    """
                                     )
-                                    status_placeholder.empty()
 
-                        except Exception as e:
-                            error_text = str(e)
-                            if hasattr(e, "detail"):  # FastAPI HTTPException
-                                error_text = e.detail
+                                    # Clear previous results
+                                    result_placeholder.empty()
+                                    status_placeholder.error(
+                                        "Access Denied: Spoof Detected"
+                                    )
+                                elif "face could not be detected" in error_text.lower():
+                                    status_placeholder.warning(
+                                        "Face not detected. Please stay within the oval guide."
+                                    )
+                                    result_placeholder.empty()
+                                else:
+                                    status_placeholder.error(
+                                        f"Recognition error: {error_text}"
+                                    )
+                                    result_placeholder.empty()
 
-                            if "spoof" in error_text.lower():
-                                status_placeholder.warning(
-                                    "⚠️ Spoof detected! Please use a real face instead of an image."
-                                )
-                                result_placeholder.empty()
-                            elif "face could not be detected" in error_text.lower():
-                                status_placeholder.warning(
-                                    "Face not detected. Please stay within the oval guide."
-                                )
-                                result_placeholder.empty()
-                            else:
-                                status_placeholder.error(
-                                    f"Recognition error: {error_text}"
-                                )
-                                result_placeholder.empty()
-
-                    countdown_active = False
-                    face_detection_start = 0
-                    last_recognition_time = current_time
-                else:
-                    # pass
-                    progress = elapsed / 3
-                    frame_with_oval = detector.draw_scanning_animation(
-                        frame_with_oval, progress
-                    )
+                        countdown_active = False
+                        face_detection_start = 0
+                        last_recognition_time = current_time
+                    else:
+                        # Modified progress calculation
+                        progress = elapsed / 2
+                        frame_with_oval = detector.draw_scanning_animation(
+                            frame_with_oval, progress
+                        )
 
             frame_placeholder.image(
                 cv2.cvtColor(frame_with_oval, cv2.COLOR_BGR2RGB),
