@@ -8,3 +8,5 @@ torch==2.5.1
 scipy==1.15.2
 facenet-pytorch==2.6.0
 weaviate-client
+streamlit
+
