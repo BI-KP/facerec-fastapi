@@ -4,21 +4,14 @@ from io import BytesIO
 import cv2
 import numpy as np
 from deepface import DeepFace
-from scipy.spatial import distance
 from PIL import Image
 import base64
-from models import Data
-from db import load_encodings, insert_encoding
+from pydantic import BaseModel
+from db import weaviate
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:3001",
-    "http://localhost:3000",
-    "localhost:3001",
-    "localhost:3000",
-]
-
+# CORS settings
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=False,
@@ -27,87 +20,102 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initial load
-encodeList, imgIds = load_encodings()
+# Weaviate class name
+WEAVIATE_CLASS = "FaceEmbeddings"
 
-def register_new_face(image: np.ndarray, face_id: str):
-    try:
-        # Convert and get face encoding
-        imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        face = DeepFace.extract_faces(imgS, detector_backend='fastmtcnn', enforce_detection=True)
-        if not face:
-            raise HTTPException(status_code=400, detail="No face detected in image")
-        
-        encode = DeepFace.represent(imgS, model_name='Facenet512', detector_backend='fastmtcnn')
-        new_encoding = encode[0]['embedding']
-        
-        # Insert new encoding into MongoDB
-        if insert_encoding(face_id, new_encoding):
-            # Reload encodings in memory
-            global encodeList, imgIds
-            encodeList, imgIds = load_encodings()
-            return True
-        else:
-            raise HTTPException(status_code=500, detail="Failed to insert encoding")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+# Ensure the class exists in Weaviate
+def setup_weaviate_schema():
+    schema = {
+        "class": WEAVIATE_CLASS,
+        "vectorizer": "none",  # We're using our own embeddings
+        "properties": [
+            {"name": "face_id", "dataType": ["string"]},
+        ],
+    }
+
+    if not weaviate.schema.exists(WEAVIATE_CLASS):
+        weaviate.schema.create_class(schema)
+
+setup_weaviate_schema()
+
+class Data(BaseModel):
+    image: str
 
 @app.post("/register/")
 async def register_face(face_id: str, file: UploadFile = File(...)):
     if not face_id:
         raise HTTPException(status_code=400, detail="face_id is required")
-    
+
     image = np.array(Image.open(BytesIO(await file.read())))
-    success = register_new_face(image, face_id)
-    
-    return {"success": success, "face_id": face_id}
+
+    try:
+        # Extract and encode face
+        imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        face = DeepFace.extract_faces(imgS, detector_backend="fastmtcnn", enforce_detection=True, anti_spoofing=True)
+        if not face:
+            raise HTTPException(status_code=400, detail="No face detected in image")
+
+        encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn")
+        embedding = encode[0]["embedding"]
+        embedding = embedding / np.linalg.norm(embedding)
+
+        # Store embedding in Weaviate
+        weaviate.data_object.create(
+            class_name=WEAVIATE_CLASS,
+            data_object={"face_id": face_id},
+            vector=embedding,
+        )
+
+        return {"success": True, "face_id": face_id}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/recognize/")
+async def recognize(file: UploadFile = File(...)):
+    image = np.array(Image.open(BytesIO(await file.read())))
+
+    try:
+        # Extract and encode face
+        imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        encode = DeepFace.represent(imgS, model_name="Facenet512", detector_backend="fastmtcnn", anti_spoofing=True)
+        query_embedding = encode[0]["embedding"]
+        query_embedding = query_embedding / np.linalg.norm(query_embedding)
+
+        # Search for the closest match in Weaviate
+        response = weaviate.query.get(
+            WEAVIATE_CLASS, ["face_id","_additional { distance }"]
+        ).with_near_vector({
+            "vector": query_embedding,
+            "distance" : 0.35
+        }).with_limit(1).do()
+
+        parsed_response = response["data"]["Get"][WEAVIATE_CLASS][0]
+        if response["data"]["Get"][WEAVIATE_CLASS]:
+            return {"name": parsed_response["face_id"], "distance":parsed_response["_additional"]["distance"]}  # Weaviate does similarity scoring
+        else:
+            return {"name": "Face Unknown", "distance":parsed_response["_additional"]["distance"]}
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/register-base64/")
 async def register_face_base64(data: Data, face_id: str):
     if not face_id:
         raise HTTPException(status_code=400, detail="face_id is required")
-    
+
     image_data = base64.b64decode(data.image)
     image = np.array(Image.open(BytesIO(image_data)))
-    success = register_new_face(image, face_id)
-    
-    return {"success": success, "face_id": face_id}
 
-def recognize_face(image: np.ndarray):
-    imgS = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    encodeImage = DeepFace.represent(imgS, model_name='Facenet512', detector_backend='fastmtcnn')
-    encodeImage = encodeImage[0]['embedding']
+    return await register_face(face_id, UploadFile(filename="image.jpg", file=BytesIO(image_data)))
 
-    results = []
-    for encodeFace in encodeList:
-        faceDist = distance.cosine(encodeImage, encodeFace)
-        if faceDist < 0.6:  # Threshold for recognizing a face
-            matchIndex = encodeList.index(encodeFace)
-            name = imgIds[matchIndex]
-            results.append({"name": name, "distance": faceDist})
-        else:
-            results.append({"name": "Unknown Person", "distance": faceDist})
-    
-    # Filter with most lowest distance
-    results.sort(key=lambda x: x['distance'])
-    return results[0]
+# @app.get("/db")
+# async def get_all_data():
+#     return weaviate.data_object.get()
 
-@app.post("/recognize/")
-async def recognize(file: UploadFile = File(...)):
-    image = np.array(Image.open(BytesIO(await file.read())))
-    results = recognize_face(image)
-    return {"results": results}
-
-@app.post("/testimage/")
-async def recognize_image(data: Data):
-    print(data.image)
-    image_data = base64.b64decode(data.image)
-    image = np.array(Image.open(BytesIO(image_data)))
-    results = recognize_face(image)
-    return {"results": results}
-
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
+# @app.delete("/")
+# async def delete(id: str):
+#     return weaviate.data_object.delete(
+#         uuid=id,
+#         class_name=WEAVIATE_CLASS
+#     )
